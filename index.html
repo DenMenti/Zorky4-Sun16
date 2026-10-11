@@ -226,7 +226,7 @@
 <body>
 <div class="app">
 
-  <p class="eyebrow">Zorki 4 · Industar-50</p>
+  <p class="eyebrow">Zorki 4</p>
   <div class="hero">
     <div class="hero-block">
       <span class="hero-tag" id="heroConditionTag">Sole pieno</span>
@@ -244,8 +244,14 @@
   <div id="viewScatto">
 
     <section class="block">
+      <p class="card-label">Obiettivo montato</p>
+      <div class="scroll-row" id="lensChips"></div>
+    </section>
+
+    <section class="block">
       <p class="card-label">Sensibilità del rullino</p>
       <div class="scroll-row" id="isoChips"></div>
+      <p class="scroll-caption" id="isoCaption"></p>
     </section>
 
     <section class="block">
@@ -261,7 +267,7 @@
     </section>
 
     <section class="block">
-      <p class="card-label">Coppie equivalenti sull'Industar-50</p>
+      <p class="card-label">Coppie equivalenti</p>
       <div class="scroll-row" id="tableBody"></div>
     </section>
 
@@ -280,7 +286,7 @@
     </section>
 
     <section class="block">
-      <p class="card-label">Quale rullino portare</p>
+      <p class="card-label">Come usare l'HP5</p>
       <p class="advice-subtitle">Quanto varierà la luce nell'uscita</p>
       <div class="chip-row" id="variabilityChips"></div>
       <p class="advice-subtitle">Tipo di fotografia</p>
@@ -294,7 +300,10 @@
 </div>
 
 <script>
-  const lens = { label:'Industar-50', sub:'f/3.5–16', stops:[3.5,4,5.6,8,11,16] };
+  const lenses = {
+    industar: { label:'Industar-50', sub:'f/3.5–16', stops:[3.5,4,5.6,8,11,16] },
+    jupiter:  { label:'Jupiter-8',   sub:'f/2–16',   stops:[2,2.8,4,5.6,8,11,16] }
+  };
 
   const icons = {
     sun: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.5"/><line x1="12" y1="1.5" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="22.5"/><line x1="1.5" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22.5" y2="12"/><line x1="4.4" y1="4.4" x2="6.1" y2="6.1"/><line x1="17.9" y1="17.9" x2="19.6" y2="19.6"/><line x1="4.4" y1="19.6" x2="6.1" y2="17.9"/><line x1="17.9" y1="6.1" x2="19.6" y2="4.4"/></svg>',
@@ -319,7 +328,7 @@
 
   const genres = [
     { id:'paesaggi', label:'Paesaggi, architettura', sub:'soggetti statici, treppiede spesso possibile', minDenom:null, tip:'punta al rullino più lento che riesci a usare: grana più fine, più dettaglio' },
-    { id:'ritratti', label:'Ritratti', sub:'persone ferme o quasi, a mano libera', minDenom:60, tip:'per uno sfondo sfocato conta più il diaframma aperto che la sensibilità del rullino' },
+    { id:'ritratti', label:'Ritratti', sub:'persone ferme o quasi, a mano libera', minDenom:60, tip:'per uno sfondo sfocato conta il diaframma aperto: il Jupiter-8 arriva a f/2' },
     { id:'quotidiano', label:'Vita quotidiana, street', sub:'persone che camminano, scene informali', minDenom:125 },
     { id:'eventi', label:'Eventi, feste, interni animati', sub:'persone che si muovono, spesso al chiuso', minDenom:125 },
     { id:'azione', label:'Sport, azione, bambini che giocano', sub:'movimento veloce da bloccare', minDenom:500 }
@@ -331,15 +340,15 @@
   const isoOptions = [25,50,64,100,125,160,200,400,800,1600,3200,6400];
   const shutterDenoms = [1,2,4,8,15,30,60,125,250,500,1000];
 
-  let state = { iso:100, condition:'sole', selectedAperture:null, genre:'quotidiano', variability:'stabile' };
+  let state = { iso:400, condition:'sole', selectedAperture:null, genre:'quotidiano', variability:'stabile', lens:'jupiter' };
 
-  const STORAGE_KEY = 'zorki4-esposimetro-v1';
+  const STORAGE_KEY = 'zorki4-esposimetro-v2';
 
   function saveState(){
     try{
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         iso: state.iso, condition: state.condition, selectedAperture: state.selectedAperture,
-        genre: state.genre, variability: state.variability
+        genre: state.genre, variability: state.variability, lens: state.lens
       }));
     }catch(e){}
   }
@@ -351,7 +360,8 @@
       if(!saved || typeof saved!=='object') return;
       if(conditions.some(c=>c.id===saved.condition)) state.condition = saved.condition;
       if(typeof saved.iso==='number' && saved.iso>0) state.iso = saved.iso;
-      if(saved.selectedAperture===null || lens.stops.includes(saved.selectedAperture)) state.selectedAperture = saved.selectedAperture;
+      if(lenses[saved.lens]) state.lens = saved.lens;
+      if(saved.selectedAperture===null || lenses[state.lens].stops.includes(saved.selectedAperture)) state.selectedAperture = saved.selectedAperture;
       if(genres.some(g=>g.id===saved.genre)) state.genre = saved.genre;
       if(variabilityOptions.some(v=>v.id===saved.variability)) state.variability = saved.variability;
     }catch(e){}
@@ -397,6 +407,17 @@
     return {r,g,b};
   }
 
+  function isoCaptionText(){
+    const v = state.iso;
+    if(v===400) return 'Ilford HP5 Plus alla sensibilità nominale.';
+    if(v===800 || v===1600 || v===3200){
+      const stops = Math.round(Math.log2(v/400));
+      return 'HP5 Plus spinta di '+stops+' stop: scatta tutto il rullino a ISO '+v+' e chiedi al laboratorio lo sviluppo in push.';
+    }
+    if(v===200) return "HP5 Plus a 200 (1 stop sotto il nominale): ombre più ricche, grana un po' più fine.";
+    return "Valore non tipico per l'HP5 Plus (nominale 400).";
+  }
+
   function buildIsoChips(){
     const el = document.getElementById('isoChips');
     el.innerHTML='';
@@ -411,6 +432,8 @@
       });
       el.appendChild(pill);
     });
+    const cap = document.getElementById('isoCaption');
+    if(cap) cap.textContent = isoCaptionText();
   }
 
   function buildConditions(){
@@ -464,9 +487,10 @@
   function renderValues(){
     const EV = currentEV();
     const cond = conditions.find(c=>c.id===state.condition);
+    const lensData = lenses[state.lens];
     let activeAperture = state.selectedAperture ?? cond.base;
-    if(!lens.stops.includes(activeAperture)){
-      activeAperture = nearestStop(lens.stops, activeAperture);
+    if(!lensData.stops.includes(activeAperture)){
+      activeAperture = nearestStop(lensData.stops, activeAperture);
     }
     const heroT = tExact(activeAperture, EV);
     const col = colorForError(shutterErrorStops(heroT));
@@ -484,7 +508,7 @@
 
     const tableBody = document.getElementById('tableBody');
     tableBody.innerHTML='';
-    lens.stops.forEach(N=>{
+    lensData.stops.forEach(N=>{
       const t = tExact(N, EV);
       const label = nearestShutterLabel(t);
       const pill=document.createElement('button');
@@ -502,11 +526,11 @@
     return conditions[Math.min(idx+1, conditions.length-1)];
   }
 
-  function pushNote(recommendedIso){
-    if(recommendedIso <= state.iso) return '';
-    const stops = Math.round(Math.log2(recommendedIso/state.iso));
-    if(stops<=0) return '';
-    return '<br><span class="film-advice-tip">Il rullino impostato ora (ISO '+state.iso+') non basterebbe: dovresti spingerlo (push) di '+stops+' stop in sviluppo, oppure procurarti un rullino più sensibile.</span>';
+  function openApertureText(N, t, lensLabel){
+    if(t < (1/1000)/Math.SQRT2){
+      return 'a f/'+N+" c'è troppa luce: supereresti il tempo massimo di 1/1000, quindi chiudi il diaframma (la combinazione giusta è in Scatto)";
+    }
+    return 'a f/'+N+' (tutto aperto sul '+lensLabel+') otterresti '+nearestShutterLabel(t);
   }
 
   function renderFilmAdvice(){
@@ -514,33 +538,52 @@
     const cond = state.variability==='variabile' ? darkerFallback(state.condition) : baseCond;
     const genre = genres.find(g=>g.id===state.genre);
     const minDenom = genre.minDenom;
-    const N = lens.stops[0];
+    const lensData = lenses[state.lens];
+    const N = lensData.stops[0];
     const out = document.getElementById('filmAdvice');
     const varNote = state.variability==='variabile'
       ? ' (contando anche i momenti più bui della giornata, tipo '+cond.label.toLowerCase()+')'
       : '';
     const tipHtml = genre.tip ? '<br><span class="film-advice-tip">'+genre.tip+'</span>' : '';
+    const head = 'Con <strong>'+baseCond.label+'</strong>'+varNote+', per '+genre.label.toLowerCase()+', ';
     if(minDenom===null){
-      const t = tExact(N, cond.ev100);
-      const label = nearestShutterLabel(t);
-      let msg = 'Con <strong>'+baseCond.label+'</strong>'+varNote+', per '+genre.label.toLowerCase()+', ISO 100 va benissimo: la grana più fine possibile. A piena apertura (f/'+N+') il tempo sarebbe '+label+'.';
+      const t = tExact(N, cond.ev100 + 2);
+      let msg = head+"l'HP5 a <strong>ISO 400</strong> va benissimo: con il treppiede i tempi lunghi non sono un problema e puoi chiudere il diaframma per più nitidezza. A "+openApertureText(N,t,lensData.label).replace(/^a /,'')+'.';
       if(t > secondsForDenom(30)){ msg += ' È lento: usa un treppiede.'; }
-      out.innerHTML = msg+tipHtml+pushNote(100);
+      out.innerHTML = msg+tipHtml;
       return;
     }
-    for(const iso of [100,200,400,800,1600,3200]){
+    for(const iso of [400,800,1600,3200]){
       const EV = cond.ev100 + Math.log2(iso/100);
       const t = tExact(N, EV);
-      const denom = nearestShutterDenom(t);
-      if(denom >= minDenom){
-        out.innerHTML = 'Con <strong>'+baseCond.label+'</strong>'+varNote+', per '+genre.label.toLowerCase()+', ti serve almeno <strong>ISO '+iso+'</strong> — a piena apertura (f/'+N+') otterresti '+nearestShutterLabel(t)+'.'+tipHtml+pushNote(iso);
+      if(nearestShutterDenom(t) >= minDenom){
+        if(iso===400){
+          out.innerHTML = head+"l'HP5 a <strong>ISO 400</strong> basta: "+openApertureText(N,t,lensData.label)+'.'+tipHtml;
+        }else{
+          const stops = Math.round(Math.log2(iso/400));
+          out.innerHTML = head+"devi spingere l'HP5 a <strong>ISO "+iso+'</strong> ('+stops+' stop): '+openApertureText(N,t,lensData.label)+'. Scatta tutto il rullino a quella sensibilità, avvisa il laboratorio e imposta ISO '+iso+' in Scatto per avere i tempi giusti.'+tipHtml;
+        }
         return;
       }
     }
-    out.innerHTML = 'Nemmeno un rullino da 3200 ISO basta a mano libera con <strong>'+cond.label+'</strong>: qui servono un treppiede o un flash, non un rullino più sensibile.'+tipHtml;
+    out.innerHTML = "Nemmeno spingendo l'HP5 a 3200 basta a mano libera con <strong>"+cond.label+'</strong> e il '+lensData.label+': qui servono un treppiede o un flash.'+tipHtml;
+  }
+
+  function buildLensChips(){
+    const el = document.getElementById('lensChips');
+    el.innerHTML='';
+    Object.entries(lenses).forEach(([key,data])=>{
+      const pill=document.createElement('button');
+      pill.type='button';
+      pill.className='scroll-pill'+(state.lens===key?' active':'');
+      pill.innerHTML = '<span>'+data.label+'</span><span class="pill-num">'+data.sub+'</span>';
+      pill.addEventListener('click', ()=>{ state.lens=key; state.selectedAperture=null; renderAll(); });
+      el.appendChild(pill);
+    });
   }
 
   function renderAll(){
+    buildLensChips();
     buildIsoChips();
     buildConditions();
     buildVariabilityChips();
