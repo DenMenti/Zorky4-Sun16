@@ -134,6 +134,7 @@
   .advice-subtitle:first-of-type{ margin-top:0; }
 
   .scroll-row{
+    position:relative;
     display:flex;
     gap:8px;
     overflow-x:auto;
@@ -164,6 +165,7 @@
     color:var(--pill-active-text);
   }
   .scroll-pill.active .pill-icon{ color:var(--pill-active-text); }
+  .scroll-pill.off{ opacity:0.4; }
   .scroll-pill .pill-num{ font-family:'IBM Plex Mono',monospace; font-variant-numeric:tabular-nums; }
   .scroll-caption{
     font-size:12px; color:var(--text-secondary);
@@ -233,7 +235,7 @@
       <div class="hero-shutter" id="heroShutter">1/125</div>
       <div class="hero-aperture" id="heroAperture">f/16</div>
     </div>
-    <p class="hero-note">Tocca una combinazione qui sotto per cambiare diaframma mantenendo la stessa esposizione</p>
+    <p class="hero-note" id="heroNote"></p>
   </div>
 
   <div class="view-tabs">
@@ -267,7 +269,12 @@
     </section>
 
     <section class="block">
-      <p class="card-label">Coppie equivalenti</p>
+      <p class="card-label">Priorità</p>
+      <div class="chip-row" id="priorityChips"></div>
+    </section>
+
+    <section class="block">
+      <p class="card-label" id="pairsLabel">Scegli l'apertura</p>
       <div class="scroll-row" id="tableBody"></div>
     </section>
 
@@ -340,7 +347,7 @@
   const isoOptions = [25,50,64,100,125,160,200,400,800,1600,3200,6400];
   const shutterDenoms = [1,2,4,8,15,30,60,125,250,500,1000];
 
-  let state = { iso:400, condition:'sole', selectedAperture:null, genre:'quotidiano', variability:'stabile', lens:'jupiter' };
+  let state = { iso:400, condition:'sole', selectedAperture:null, selectedShutter:null, priority:'apertura', genre:'quotidiano', variability:'stabile', lens:'jupiter' };
 
   const STORAGE_KEY = 'zorki4-esposimetro-v2';
 
@@ -348,7 +355,8 @@
     try{
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         iso: state.iso, condition: state.condition, selectedAperture: state.selectedAperture,
-        genre: state.genre, variability: state.variability, lens: state.lens
+        genre: state.genre, variability: state.variability, lens: state.lens,
+        selectedShutter: state.selectedShutter, priority: state.priority
       }));
     }catch(e){}
   }
@@ -362,6 +370,8 @@
       if(typeof saved.iso==='number' && saved.iso>0) state.iso = saved.iso;
       if(lenses[saved.lens]) state.lens = saved.lens;
       if(saved.selectedAperture===null || lenses[state.lens].stops.includes(saved.selectedAperture)) state.selectedAperture = saved.selectedAperture;
+      if(saved.priority==='apertura' || saved.priority==='tempo') state.priority = saved.priority;
+      if(saved.selectedShutter===null || shutterDenoms.includes(saved.selectedShutter)) state.selectedShutter = saved.selectedShutter ?? null;
       if(genres.some(g=>g.id===saved.genre)) state.genre = saved.genre;
       if(variabilityOptions.some(v=>v.id===saved.variability)) state.variability = saved.variability;
     }catch(e){}
@@ -427,7 +437,7 @@
       pill.className='scroll-pill'+(state.iso===v?' active':'');
       pill.innerHTML = '<span class="pill-num">'+v+'</span>';
       pill.addEventListener('click', ()=>{
-        state.iso=v; state.selectedAperture=null;
+        state.iso=v;
         renderAll();
       });
       el.appendChild(pill);
@@ -445,7 +455,7 @@
         pill.type='button';
         pill.className='scroll-pill'+(state.condition===c.id?' active':'');
         pill.innerHTML = '<span class="pill-icon">'+c.icon+'</span><span>'+c.label+'</span>';
-        pill.addEventListener('click', ()=>{ state.condition=c.id; state.selectedAperture=null; renderAll(); });
+        pill.addEventListener('click', ()=>{ state.condition=c.id; renderAll(); });
         el.appendChild(pill);
       });
       const captionId = idx===0 ? 'condCaption' : 'condCaptionPrepara';
@@ -484,41 +494,129 @@
     if(cap) cap.textContent = active ? active.sub : '';
   }
 
-  function renderValues(){
+  function centerRow(r){
+    if(!r.clientWidth) return;
+    const a=r.querySelector('.scroll-pill.active');
+    if(a) r.scrollLeft = a.offsetLeft - (r.clientWidth - a.offsetWidth)/2;
+    r.dataset.init='1';
+  }
+  function withRowScroll(fn){
+    const rows=[...document.querySelectorAll('.scroll-row')];
+    const snap=rows.map(r=>r.scrollLeft);
+    fn();
+    rows.forEach((r,i)=>{ if(r.dataset.init==='1') r.scrollLeft=snap[i]; else centerRow(r); });
+  }
+
+  function exactTimeLabel(t){
+    if(t>=1) return (Math.round(t*10)/10)+' s';
+    return '1/'+Math.round(1/t);
+  }
+  function fLabel(N){ return 'f/'+(Math.round(N*10)/10); }
+  function shutterLabelOf(d){ return d===1 ? '1 s' : '1/'+d; }
+
+  // Restituisce {denom, aperture, err (stop, assoluto), signed (+ = sovra), exactT, exactN, off}
+  function solve(mode, cond, EV, stops, value){
+    if(mode==='apertura'){
+      const ap = stops.includes(value) ? value : nearestStop(stops, value);
+      const t = tExact(ap, EV);
+      const d = nearestShutterDenom(t);
+      const signedUnder = Math.log2(t/secondsForDenom(d)); // + = tempo scelto più corto del necessario = sotto
+      return { denom:d, aperture:ap, err:Math.abs(signedUnder), over:-signedUnder, exactT:t, exactN:ap };
+    }
+    const d = value;
+    const s = secondsForDenom(d);
+    const Nex = Math.sqrt(s*Math.pow(2,EV));
+    const ap = nearestStop(stops, Nex);
+    const over = 2*Math.log2(Nex/ap); // + = apertura scelta più aperta del necessario = sovra
+    return { denom:d, aperture:ap, err:Math.abs(over), over:over, exactT:s, exactN:Nex };
+  }
+
+  function noteFor(mode, r){
+    const sovra = r.over>0 ? 'sovraesposto' : 'sottoesposto';
+    const stopsTxt = (Math.round(r.err*10)/10)+' stop';
+    if(r.err<0.15){
+      return 'Esposizione precisa: imposta '+fLabel(r.aperture)+' e '+shutterLabelOf(r.denom)+'.';
+    }
+    if(mode==='apertura'){
+      if(r.err>=0.6) return 'Fuori scala: a '+fLabel(r.aperture)+' servirebbe '+exactTimeLabel(r.exactT)+', ma la ghiera arriva a '+shutterLabelOf(r.denom)+' ('+sovra+' di circa '+stopsTxt+'). Cambia apertura.';
+      return 'Tempo esatto '+exactTimeLabel(r.exactT)+': sulla ghiera il più vicino è '+shutterLabelOf(r.denom)+' (circa '+stopsTxt+' '+(r.over>0?'sovra':'sotto')+').';
+    }
+    if(r.err>=0.6) return 'Fuori scala: a '+shutterLabelOf(r.denom)+' servirebbe '+fLabel(r.exactN)+', l\'obiettivo arriva a '+fLabel(r.aperture)+' ('+sovra+' di circa '+stopsTxt+'). Cambia tempo.';
+    return 'Apertura esatta '+fLabel(r.exactN)+': tra due posizioni, la più vicina è '+fLabel(r.aperture)+' (circa '+stopsTxt+' '+(r.over>0?'sovra':'sotto')+'). Se la ghiera lo permette, regola a metà.';
+  }
+
+  function renderValuesInner(){
     const EV = currentEV();
     const cond = conditions.find(c=>c.id===state.condition);
-    const lensData = lenses[state.lens];
-    let activeAperture = state.selectedAperture ?? cond.base;
-    if(!lensData.stops.includes(activeAperture)){
-      activeAperture = nearestStop(lensData.stops, activeAperture);
-    }
-    const heroT = tExact(activeAperture, EV);
-    const col = colorForError(shutterErrorStops(heroT));
-    const solid = 'rgb('+col.r+','+col.g+','+col.b+')';
+    const stops = lenses[state.lens].stops;
+    const mode = state.priority;
 
+    let value;
+    if(mode==='apertura'){
+      value = state.selectedAperture ?? cond.base;
+    }else{
+      value = state.selectedShutter ?? nearestShutterDenom(tExact(cond.base, EV));
+      if(!shutterDenoms.includes(value)) value = nearestShutterDenom(tExact(cond.base, EV));
+    }
+    const r = solve(mode, cond, EV, stops, value);
+
+    const col = colorForError(r.err);
+    const solid = 'rgb('+col.r+','+col.g+','+col.b+')';
     const heroApertureEl = document.getElementById('heroAperture');
     const heroShutterEl = document.getElementById('heroShutter');
-    const heroTag = document.getElementById('heroConditionTag');
-
-    heroApertureEl.textContent = 'f/'+activeAperture;
+    heroApertureEl.textContent = fLabel(r.aperture);
     heroApertureEl.style.color = solid;
-    heroShutterEl.textContent = nearestShutterLabel(heroT);
+    heroShutterEl.textContent = shutterLabelOf(r.denom);
     heroShutterEl.style.color = solid;
-    heroTag.textContent = cond.label;
+    document.getElementById('heroConditionTag').textContent = cond.label;
+    document.getElementById('heroNote').textContent = noteFor(mode, r);
 
+    document.getElementById('pairsLabel').textContent = mode==='apertura' ? "Scegli l'apertura" : 'Scegli il tempo';
     const tableBody = document.getElementById('tableBody');
     tableBody.innerHTML='';
-    lensData.stops.forEach(N=>{
-      const t = tExact(N, EV);
-      const label = nearestShutterLabel(t);
-      const pill=document.createElement('button');
-      pill.type='button';
-      pill.className='scroll-pill'+(N===activeAperture?' active':'');
-      pill.innerHTML = '<span class="pill-num">f/'+N+'</span><span class="pill-num">'+label+'</span>';
-      pill.addEventListener('click', ()=>{ state.selectedAperture=N; renderValues(); });
-      tableBody.appendChild(pill);
-    });
+    if(mode==='apertura'){
+      stops.forEach(N=>{
+        const x = solve('apertura', cond, EV, stops, N);
+        const pill=document.createElement('button');
+        pill.type='button';
+        pill.className='scroll-pill'+(N===r.aperture?' active':'')+(x.err>=0.6?' off':'');
+        pill.innerHTML = '<span class="pill-num">f/'+N+'</span><span class="pill-num">'+shutterLabelOf(x.denom)+'</span>';
+        pill.addEventListener('click', ()=>{ state.selectedAperture=N; renderValues(); });
+        tableBody.appendChild(pill);
+      });
+    }else{
+      [...shutterDenoms].reverse().forEach(d=>{
+        const x = solve('tempo', cond, EV, stops, d);
+        const pill=document.createElement('button');
+        pill.type='button';
+        pill.className='scroll-pill'+(d===r.denom?' active':'')+(x.err>=0.6?' off':'');
+        pill.innerHTML = '<span class="pill-num">'+shutterLabelOf(d)+'</span><span class="pill-num">'+fLabel(x.aperture)+'</span>';
+        pill.addEventListener('click', ()=>{ state.selectedShutter=d; renderValues(); });
+        tableBody.appendChild(pill);
+      });
+    }
     saveState();
+  }
+  function renderValues(){ withRowScroll(renderValuesInner); }
+
+  function buildPriorityChips(){
+    const el = document.getElementById('priorityChips');
+    el.innerHTML='';
+    [
+      { id:'apertura', label:'Apertura', sub:'scelgo il diaframma, ti dico il tempo' },
+      { id:'tempo',    label:'Tempo',    sub:'scelgo il tempo, ti dico il diaframma' }
+    ].forEach(o=>{
+      const chip=document.createElement('button');
+      chip.type='button';
+      chip.className='chip'+(state.priority===o.id?' active':'');
+      chip.innerHTML = o.label+'<span class="sub">'+o.sub+'</span>';
+      chip.addEventListener('click', ()=>{
+        state.priority=o.id;
+        document.getElementById('tableBody').dataset.init='';
+        renderAll();
+      });
+      el.appendChild(chip);
+    });
   }
 
   function darkerFallback(condId){
@@ -577,19 +675,22 @@
       pill.type='button';
       pill.className='scroll-pill'+(state.lens===key?' active':'');
       pill.innerHTML = '<span>'+data.label+'</span><span class="pill-num">'+data.sub+'</span>';
-      pill.addEventListener('click', ()=>{ state.lens=key; state.selectedAperture=null; renderAll(); });
+      pill.addEventListener('click', ()=>{ state.lens=key; renderAll(); });
       el.appendChild(pill);
     });
   }
 
   function renderAll(){
-    buildLensChips();
-    buildIsoChips();
-    buildConditions();
-    buildVariabilityChips();
-    buildGenreList();
-    renderValues();
-    renderFilmAdvice();
+    withRowScroll(()=>{
+      buildLensChips();
+      buildIsoChips();
+      buildConditions();
+      buildPriorityChips();
+      buildVariabilityChips();
+      buildGenreList();
+      renderValuesInner();
+      renderFilmAdvice();
+    });
   }
 
   const brightnessBuckets = [
@@ -634,7 +735,6 @@
       const avg = sum/(data.length/4);
       const condId = conditionForBrightness(avg);
       state.condition = condId;
-      state.selectedAperture = null;
       const cond = conditions.find(c=>c.id===condId);
       result.textContent = 'Stima: '+cond.label+' — verifica sotto e correggi a mano se non ti sembra giusta.';
       buildConditions();
@@ -656,6 +756,7 @@
     document.getElementById('viewPrepara').style.display = view==='prepara' ? '' : 'none';
     document.getElementById('tabScatto').classList.toggle('active', view==='scatto');
     document.getElementById('tabPrepara').classList.toggle('active', view==='prepara');
+    document.querySelectorAll('#'+(view==='scatto'?'viewScatto':'viewPrepara')+' .scroll-row').forEach(r=>{ if(r.dataset.init!=='1') centerRow(r); });
   }
   document.getElementById('tabScatto').addEventListener('click', ()=>switchView('scatto'));
   document.getElementById('tabPrepara').addEventListener('click', ()=>switchView('prepara'));
